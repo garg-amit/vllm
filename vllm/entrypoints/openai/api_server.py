@@ -5,6 +5,7 @@ import re
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Optional, Set
+from urllib.parse import unquote
 
 import fastapi
 import uvicorn
@@ -138,10 +139,11 @@ async def create_embedding(request: EmbeddingRequest, raw_request: Request):
     else:
         return JSONResponse(content=generator.model_dump())
 
-@app.put("/lora/models/{model_name}")
+@app.put("/lora/models/{model_name:path}")
 async def add_lora_module(request: LoraAddRequest, model_name: str):
     try:
-        results = await asyncio.wait_for(openai_serving_completion.add_lora_module(request, model_name), timeout=60)
+        decoded_model_name = unquote(model_name)
+        results = await asyncio.wait_for(openai_serving_completion.add_lora_module(request, decoded_model_name), timeout=60)
     except asyncio.TimeoutError:
         return JSONResponse(
             status_code=408,
@@ -171,10 +173,11 @@ async def add_lora_module(request: LoraAddRequest, model_name: str):
         )
 
 
-@app.delete("/lora/models/{model_name}")
+@app.delete("/lora/models/{model_name:path}")
 async def remove_lora_module(model_name: str):
     try:
-        results = await asyncio.wait_for(openai_serving_completion.remove_lora_module(model_name), timeout=60)
+        decoded_model_name = unquote(model_name)
+        results = await asyncio.wait_for(openai_serving_completion.remove_lora_module(decoded_model_name), timeout=60)
     except asyncio.TimeoutError:
         return JSONResponse(
             status_code=408,
