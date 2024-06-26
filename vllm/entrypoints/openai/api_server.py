@@ -5,6 +5,7 @@ import re
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Optional, Set
+from urllib.parse import unquote
 
 import fastapi
 import uvicorn
@@ -22,7 +23,8 @@ from vllm.entrypoints.openai.cli_args import make_arg_parser
 from vllm.entrypoints.openai.protocol import (ChatCompletionRequest,
                                               ChatCompletionResponse,
                                               CompletionRequest,
-                                              EmbeddingRequest, ErrorResponse)
+                                              EmbeddingRequest, ErrorResponse,
+                                              LoraAddRequest,LoraErrorResponse)
 from vllm.entrypoints.openai.serving_chat import OpenAIServingChat
 from vllm.entrypoints.openai.serving_completion import OpenAIServingCompletion
 from vllm.entrypoints.openai.serving_embedding import OpenAIServingEmbedding
@@ -136,6 +138,72 @@ async def create_embedding(request: EmbeddingRequest, raw_request: Request):
                             status_code=generator.code)
     else:
         return JSONResponse(content=generator.model_dump())
+
+@app.put("/lora/models/{model_name:path}")
+async def add_lora_module(request: LoraAddRequest, model_name: str):
+    try:
+        decoded_model_name = unquote(model_name)
+        results = await asyncio.wait_for(openai_serving_chat.add_lora_module(request, decoded_model_name), timeout=60)
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            status_code=408,
+            content={"error": {"type": "TimeoutError", "message": "The request timed out after 60 seconds."}},
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"type": "ServerError", "message": str(e)}},
+        )
+    models = await openai_serving_chat.show_available_models()
+    if isinstance(results, LoraErrorResponse):
+        # Use the status code from the first error response
+        status_code = results.code
+        return JSONResponse(
+            content={
+                "message": "Module(s) added failed",
+                "lora_models": models.model_dump(),
+                "error": results.model_dump(),
+            },
+            status_code=status_code,
+        )
+    else:
+        return JSONResponse(
+            content={"message": "Module(s) added successfully", "lora_models": models.model_dump(), "error": None},
+            status_code=200,
+        )
+
+
+@app.delete("/lora/models/{model_name:path}")
+async def remove_lora_module(model_name: str):
+    try:
+        decoded_model_name = unquote(model_name)
+        results = await asyncio.wait_for(openai_serving_chat.remove_lora_module(decoded_model_name), timeout=60)
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            status_code=408,
+            content={"error": {"type": "TimeoutError", "message": "The request timed out after 60 seconds."}},
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"type": "ServerError", "message": str(e)}},
+        )
+    models = await openai_serving_chat.show_available_models()
+    if isinstance(results, LoraErrorResponse):
+        status_code = results.code
+        return JSONResponse(
+            content={
+                "message": "Module(s) removed failed",
+                "lora_models": models.model_dump(),
+                "error": results.model_dump(),
+            },
+            status_code=status_code,
+        )
+    else:
+        return JSONResponse(
+            content={"message": "Module(s) removed successfully", "lora_models": models.model_dump(), "error": None},
+            status_code=200,
+        )
 
 
 if __name__ == "__main__":
