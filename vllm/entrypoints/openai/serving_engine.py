@@ -1,3 +1,4 @@
+import asyncio
 import json
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -262,10 +263,10 @@ class OpenAIServing:
                 status_code=HTTPStatus.BAD_REQUEST,
                 lora_name=lora_request.lora_name,
             )
-        except Exception:
+        except Exception as e:
             self._remove_lora(lora_request.lora_name)
             return self.create_lora_error_response(
-                message=f"Adding lora {lora_request.lora_name} failed.",
+                message=f"Adding lora {lora_request.lora_name} failed. {e}",
                 err_type="InternalServerError",
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 lora_name=lora_request.lora_name,
@@ -282,9 +283,9 @@ class OpenAIServing:
             result = await loop.run_in_executor(
                 None, self.engine.engine.model_executor.remove_lora, lora_id
             )
-        except Exception:
+        except Exception as e:
             return self.create_lora_error_response(
-                message=f"Removing lora {model_name} failed.",
+                message=f"Removing lora {model_name} failed. {e}",
                 err_type="InternalServerError",
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 lora_name=model_name,

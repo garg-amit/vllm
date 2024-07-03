@@ -24,7 +24,7 @@ from vllm.entrypoints.openai.protocol import (ChatCompletionRequest,
                                               ChatCompletionResponse,
                                               CompletionRequest,
                                               EmbeddingRequest, ErrorResponse,
-                                              LoraAddRequest,LoraErrorResponse)
+                                              LoraAddRequest, LoraErrorResponse)
 from vllm.entrypoints.openai.serving_chat import OpenAIServingChat
 from vllm.entrypoints.openai.serving_completion import OpenAIServingCompletion
 from vllm.entrypoints.openai.serving_embedding import OpenAIServingEmbedding
