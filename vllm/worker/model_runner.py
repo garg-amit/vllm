@@ -261,7 +261,8 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
                             self.input_positions[seq_id].clear()
 
                     if num_orig_input_tokens_list:
-                        self.num_orig_input_tokens_list = num_orig_input_tokens_list
+                        self.num_orig_input_tokens_list = \
+                            num_orig_input_tokens_list
                     else:
                         for seq_id in range(len(self.seq_ids)):
                             self.num_orig_input_tokens_list[seq_id].clear()
@@ -327,7 +328,8 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
             else:
                 self.input_tokens = input_tokens or []
                 self.input_positions = input_positions or []
-                self.num_orig_input_tokens_list = num_orig_input_tokens_list or []
+                self.num_orig_input_tokens_list = \
+                    num_orig_input_tokens_list or []
                 self.seq_lens = seq_lens or []
                 self.orig_seq_lens = orig_seq_lens or []
                 self.query_lens = query_lens or []
@@ -678,7 +680,8 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
 
         num_orig_input_tokens_list = []
         for inter_data in self.inter_data_list:
-            for cur_num_orig_input_tokens_list in inter_data.num_orig_input_tokens_list:
+            for cur_num_orig_input_tokens_list \
+                in inter_data.num_orig_input_tokens_list:
                 num_orig_input_tokens_list.extend(
                     cur_num_orig_input_tokens_list)
 
