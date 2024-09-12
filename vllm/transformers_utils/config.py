@@ -72,7 +72,22 @@ def file_or_path_exists(model: Union[str, Path], config_name, revision,
     if Path(model).exists():
         return (Path(model) / config_name).is_file()
 
-    return file_exists(model, config_name, revision=revision, token=token)
+    # Offline mode support: Check if config file is cached already
+    cached_filepath = try_to_load_from_cache(repo_id=model,
+                                             filename=config_name,
+                                             revision=revision)
+    if isinstance(cached_filepath, str):
+        # The config file exists in cache- we can continue trying to load
+        return True
+
+    # NB: file_exists will only check for the existence of the config file on
+    # hf_hub. This will fail in offline mode.
+    try:
+        return file_exists(model, config_name, revision=revision, token=token)
+    except huggingface_hub.errors.OfflineModeIsEnabled:
+        # Don't raise in offline mode, all we know is that we don't have this
+        # file cached.
+        return False
 
 
 def get_config(
