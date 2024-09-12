@@ -1,6 +1,4 @@
 import asyncio
-import os
-import uuid
 from asyncio import CancelledError
 from copy import copy
 from dataclasses import dataclass
