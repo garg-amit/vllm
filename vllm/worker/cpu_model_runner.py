@@ -325,7 +325,8 @@ class ModelInputForCPUBuilder(ModelRunnerInputBuilderBase[ModelInputForCPU]):
                         input_mrope_positions[idx].extend(next_pos[idx])
                 else:
                     input_positions.append(position)
-                    num_orig_input_tokens_list.append(seq_data.get_prompt_len())
+                    num_orig_input_tokens_list.append(
+                        seq_data.get_prompt_len())
 
                 seq_len = seq_len if self.sliding_window is None else min(
                     seq_len, self.sliding_window)
