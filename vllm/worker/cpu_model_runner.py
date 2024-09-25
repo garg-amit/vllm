@@ -12,11 +12,13 @@ from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
                          SchedulerConfig)
 from vllm.logger import init_logger
 from vllm.model_executor import SamplingMetadata
+from vllm.model_executor.layers.rotary_embedding import MRotaryEmbedding
 from vllm.model_executor.layers.sampler import SamplerOutput
 from vllm.model_executor.model_loader import get_model
 from vllm.multimodal import (MULTIMODAL_REGISTRY, BatchedTensorInputs,
                              MultiModalInputs)
-from vllm.sequence import IntermediateTensors, SequenceGroupMetadata
+from vllm.sequence import (IntermediateTensors, SequenceData,
+                           SequenceGroupMetadata)
 from vllm.utils import STR_NOT_IMPL_ENC_DEC_ERR_STRS, make_tensor_with_pad
 from vllm.worker.model_runner_base import (
     ModelRunnerBase, ModelRunnerInputBase, ModelRunnerInputBuilderBase,
@@ -145,6 +147,38 @@ class ModelInputForCPUBuilder(ModelRunnerInputBuilderBase[ModelInputForCPU]):
             query_lens=seq_lens,
         )
 
+    def _compute_multi_modal_input(self, seq_data: SequenceData, mm_data,
+                                   computed_len: int):
+        mm_kwargs = self.multi_modal_input_mapper(mm_data)
+
+        # special processing for mrope position deltas.
+        mrope_positions = None
+        if self.runner.model_is_mrope:
+            image_grid_thw = mm_kwargs.get("image_grid_thw", None)
+            video_grid_thw = mm_kwargs.get("video_grid_thw", None)
+            assert image_grid_thw is not None or video_grid_thw is not None, (
+                "mrope embedding type requires multi-modal input mapper "
+                "returns 'image_grid_thw' or 'video_grid_thw'.")
+
+            hf_config = self.runner.model_config.hf_config
+            token_ids = seq_data.get_token_ids()
+
+            mrope_positions, mrope_position_delta = \
+                MRotaryEmbedding.get_input_positions(
+                    token_ids,
+                    image_grid_thw=image_grid_thw,
+                    video_grid_thw=video_grid_thw,
+                    image_token_id=hf_config.image_token_id,
+                    video_token_id=hf_config.video_token_id,
+                    vision_start_token_id=hf_config.vision_start_token_id,
+                    vision_end_token_id=hf_config.vision_end_token_id,
+                    spatial_merge_size=hf_config.vision_config.
+                    spatial_merge_size,
+                    context_len=computed_len,
+                )
+            seq_data.mrope_position_delta = mrope_position_delta
+        return mm_kwargs, mrope_positions
+
     def _prepare_prompt(
         self,
         seq_group_metadata_list: List[SequenceGroupMetadata],
@@ -155,6 +189,8 @@ class ModelInputForCPUBuilder(ModelRunnerInputBuilderBase[ModelInputForCPU]):
         input_positions: List[int] = []
         # The number of original input tokens of each sequence
         num_orig_input_tokens_list: List[int] = []
+        input_mrope_positions: List[List[int]] = [[] for _ in range(3)]
+
         slot_mapping: List[int] = []
         seq_lens: List[int] = []
         multi_modal_inputs_list: List[MultiModalInputs] = []
@@ -173,16 +209,22 @@ class ModelInputForCPUBuilder(ModelRunnerInputBuilderBase[ModelInputForCPU]):
             seq_lens.append(seq_len)  # Prompt token num
             input_tokens.extend(prompt_tokens)  # Token ids
 
+            mrope_positions = None
+            if (mm_data := seq_group_metadata.multi_modal_data):
+                mm_kwargs, mrope_positions = self._compute_multi_modal_input(
+                    seq_data, mm_data, computed_len)
+                multi_modal_inputs_list.append(mm_kwargs)
+
             # Token position ids
             # NOTE(woosuk): Here we assume that the first token in the prompt
             # is always the first token in the sequence.
-            input_positions.extend(list(range(computed_len, seq_len)))
-            num_orig_input_tokens_list.extend([seq_data.get_prompt_len()] *
+            if mrope_positions:
+                for idx in range(3):
+                    input_mrope_positions[idx].extend(mrope_positions[idx])
+            else:
+                input_positions.extend(list(range(computed_len, seq_len)))
+                num_orig_input_tokens_list.extend([seq_data.get_prompt_len()] *
                                               (seq_len - computed_len))
-
-            if (mm_data := seq_group_metadata.multi_modal_data):
-                mm_kwargs = self.multi_modal_input_mapper(mm_data)
-                multi_modal_inputs_list.append(mm_kwargs)
 
             # Compute the slot mapping.
             block_table = seq_group_metadata.block_tables[seq_id]
@@ -206,12 +248,18 @@ class ModelInputForCPUBuilder(ModelRunnerInputBuilderBase[ModelInputForCPU]):
                 slot = block_number * self.block_size + block_offset
                 slot_mapping.append(slot)
 
+        if any(input_mrope_positions):
+            input_positions = None  # type: ignore
+        else:
+            input_mrope_positions = None  # type: ignore
+
         num_prompt_tokens = len(input_tokens)
 
         input_tokens = torch.tensor(input_tokens,
                                     dtype=torch.long,
                                     device=self.device)  # type: ignore
-        input_positions = torch.tensor(input_positions,
+        input_positions = torch.tensor(input_positions
+                                       or input_mrope_positions,
                                        dtype=torch.long,
                                        device=self.device)  # type: ignore
         num_orig_input_tokens_tensor = torch.tensor(
@@ -248,6 +296,7 @@ class ModelInputForCPUBuilder(ModelRunnerInputBuilderBase[ModelInputForCPU]):
         input_positions: List[int] = []
         # The number of original input tokens of each sequence
         num_orig_input_tokens_list: List[int] = []
+        input_mrope_positions: List[List[int]] = [[] for _ in range(3)]
         slot_mapping: List[int] = []
         seq_lens: List[int] = []
         block_tables: List[List[int]] = []
@@ -265,8 +314,18 @@ class ModelInputForCPUBuilder(ModelRunnerInputBuilderBase[ModelInputForCPU]):
 
                 seq_len = seq_data.get_len()
                 position = seq_len - 1
-                input_positions.append(position)
-                num_orig_input_tokens_list.append(seq_data.get_prompt_len())
+                if seq_data.mrope_position_delta is not None:
+                    context_len = seq_data.get_num_computed_tokens()
+                    next_pos = MRotaryEmbedding.get_next_input_positions(
+                        seq_data.mrope_position_delta,
+                        context_len,
+                        seq_len,
+                    )
+                    for idx in range(3):
+                        input_mrope_positions[idx].extend(next_pos[idx])
+                else:
+                    input_positions.append(position)
+                    num_orig_input_tokens_list.append(seq_data.get_prompt_len())
 
                 seq_len = seq_len if self.sliding_window is None else min(
                     seq_len, self.sliding_window)
@@ -284,12 +343,18 @@ class ModelInputForCPUBuilder(ModelRunnerInputBuilderBase[ModelInputForCPU]):
                     block_table = block_table[-sliding_window_blocks:]
                 block_tables.append(block_table)
 
+        if any(input_mrope_positions):
+            input_positions = None  # type: ignore
+        else:
+            input_mrope_positions = None  # type: ignore
+
         max_decode_seq_len = max(seq_lens)
 
         input_tokens = torch.tensor(input_tokens,
                                     dtype=torch.long,
                                     device=self.device)
-        input_positions = torch.tensor(input_positions,
+        input_positions = torch.tensor(input_positions
+                                       or input_mrope_positions,
                                        dtype=torch.long,
                                        device=self.device)
         num_orig_input_tokens_tensor = torch.tensor(
@@ -387,6 +452,15 @@ class CPUModelRunner(ModelRunnerBase[ModelInputForCPU]):
         if self.model_config.is_encoder_decoder_model:
             raise NotImplementedError(
                 STR_NOT_IMPL_ENC_DEC_ERR_STRS['STR_NOT_IMPL_ENC_DEC_CPU'])
+
+    @property
+    def model_is_mrope(self) -> bool:
+        """Detect if the model has "mrope" rope_scaling type.
+        mrope requires keep "rope_deltas" between prompt and decoding phases."""
+        rope_scaling = getattr(self.model_config.hf_config, "rope_scaling", {})
+        if rope_scaling is None:
+            return False
+        return rope_scaling.get("type", None) == "mrope"
 
     def load_model(self) -> None:
         self.model = get_model(model_config=self.model_config,
