@@ -327,7 +327,8 @@ class CommonAttentionState(AttentionState):
             seq_lens_tensor=self._graph_seq_lens[:batch_size],
             num_orig_input_tokens_tensor=self.
             _num_orig_input_tokens_tensor[:batch_size],
-            max_query_len=None,
+            max_query_len=1,
+            decode_query_len=1,
             max_prefill_seq_len=0,
             max_decode_seq_len=self.runner.max_seq_len_to_capture,
             query_start_loc=None,
@@ -380,10 +381,8 @@ class CommonAttentionState(AttentionState):
             attn_metadata.decode_metadata.seq_lens_tensor, non_blocking=True)
         input_buffers["block_tables"].copy_(
             attn_metadata.decode_metadata.block_tables, non_blocking=True)
-<<<<<<< HEAD
         input_buffers["num_orig_input_tokens_tensor"].copy_(
             attn_metadata.num_orig_input_tokens_tensor, non_blocking=True)
-=======
         if is_encoder_decoder_model:
             # The encoder decoder model works only with XFormers backend.
             # Assert the same.
@@ -392,7 +391,6 @@ class CommonAttentionState(AttentionState):
             f" got '{self.runner.attn_backend.get_name()}'"
             self._prepare_input_buffers_for_enc_dec_model(
                 attn_metadata, input_buffers)
->>>>>>> 1009e93c ([Encoder decoder] Add cuda graph support during decoding for encoder-decoder models (#7631))
 
     def begin_forward(self, model_input) -> None:
         return
